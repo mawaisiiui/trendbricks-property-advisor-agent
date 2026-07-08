@@ -11,18 +11,70 @@ This is a work-in-progress, built in public increments (see commit
 history). This README is updated honestly at the end of each stage,
 including what does not work yet.
 
-## Status: Day 1 of ~4
+## Status: Day 2 of ~4 (in progress)
 
-Day 1 scope (this commit): project skeleton, MySQL connection layer, the
-`search_listings` retrieval tool, and a test suite that runs without a
-live database connection.
+Day 1: project skeleton, MySQL connection layer, the `search_listings`
+retrieval tool, and a test suite that runs without a live database
+connection.
+
+Day 2 so far: real-data investigation of the analytics/history columns
+(see "Why price trend analysis is blocked" below) and the
+`comparable_properties` tool + tests, built cross-sectionally since a
+real time-based trend isn't possible with the current data.
 
 **Not built yet (coming in later commits):** the actual agent loop
-(multi-step reasoning, broaden/narrow retry logic), price trend analysis,
-appreciation scoring, comparable-properties tool, memory, and the
-self-validation step before final output. Until those land, this repo is
-a retrieval tool with tests -- not yet an agent. See the "Roadmap" section
-below for the honest current state.
+(multi-step reasoning, broaden/narrow retry logic), appreciation scoring,
+memory, and the self-validation step before final output. Until those
+land, this repo is a set of retrieval/comparison tools with tests -- not
+yet an agent. See the "Roadmap" section below for the honest current
+state.
+
+## Why price trend analysis is blocked (Day 2 finding)
+
+The original Day 2 plan was to build a `price_trend_analyzer` using the
+`analytics_week` / `analytics_year` columns. Before writing any code, I
+queried the live table to check whether there's actually enough history
+to compute a trend -- and there isn't:
+
+```sql
+SELECT analytics_year, analytics_week, COUNT(*) FROM properties
+GROUP BY analytics_year, analytics_week;
+-- one row: {analytics_year: 2026, analytics_week: 28, cnt: 49939}
+
+SELECT DATE(created_at), COUNT(*) FROM properties GROUP BY DATE(created_at);
+-- one row: all 49,939 rows created the same day
+
+SELECT COUNT(*), SUM(updated_at IS NULL) FROM properties;
+-- 49939 total, 49939 NULL updated_at -- no row has ever been re-scraped
+```
+
+Every row belongs to the same week and was inserted on the same day --
+this is a single snapshot, not an accumulated time series. The
+`analytics_week`/`analytics_year` columns clearly exist for *future*
+weekly scrape runs to bucket into, but right now there is nothing to
+trend over. Building a tool called "price trend analyzer" against one
+data point would produce plausible-looking but fabricated output, which
+is exactly what this project is trying not to do.
+
+**Decision (confirmed with the user):** defer the trend tool entirely.
+Built `comparable_properties` first instead, since it's genuinely
+answerable with a single snapshot (cross-sectional comparison against
+other current listings, not a trend over time). Revisit
+`price_trend_analyzer` once the scraper has run more than once and
+`analytics_week` actually has more than one distinct value.
+
+## Data scope caveat (Day 2 finding)
+
+Parsing the real `address` field across all 49,939 rows shows the
+current DB is heavily skewed: 85.7% Karachi (Sindh), 14.2% Rawalpindi
+(Punjab), and only 0.1% Islamabad (59 rows) -- despite the project being
+framed as "Islamabad/Rawalpindi real estate." Confirmed with the user:
+this is a known sample-data artifact, not the shape of production data,
+so the tools are deliberately built city-agnostic (deriving the
+comparison city from each row's real address rather than hardcoding an
+Islamabad/Rawalpindi assumption the current sample doesn't actually
+support). Worth re-checking this distribution once running against full
+production data.
 
 ## Why this data is harder than a clean schema
 
@@ -47,13 +99,15 @@ idealized fields:
 
 ```
 trendbricks-agent/
-├── db.py                        # MySQL connection helper
+├── db.py                            # MySQL connection helper
 ├── tools/
-│   └── search_listings.py       # retrieval tool + LangChain adapter stub
+│   ├── search_listings.py           # retrieval tool + LangChain adapter stub
+│   └── comparable_properties.py     # cross-sectional "similar current listings" tool + adapter stub
 ├── scripts/
-│   └── export_data.py           # connection check + CSV export utility
+│   └── export_data.py               # connection check + CSV export utility
 ├── tests/
-│   └── test_search_listings.py  # mocked unit tests + one honest skipped integration test
+│   ├── test_search_listings.py      # mocked unit tests + one honest skipped integration test
+│   └── test_comparable_properties.py
 ├── .env.example
 └── requirements.txt
 ```
@@ -125,20 +179,29 @@ pytest tests/ -v
   the agent's future bedroom-based reasoning can exclude or caveat them
   rather than silently trusting a `bedrooms='0'` value that may just mean
   "not recorded for this listing type."
-- The `search_listings_tool_fn` LangChain adapter is written but not yet
-  registered with an actual agent -- there is no agent loop yet (Day 2).
+- The `search_listings_tool_fn` and `comparable_properties_tool_fn`
+  LangChain adapters are written but not yet registered with an actual
+  agent -- there is no agent loop yet.
 - No amenities data is ingested yet. The user mentioned amenities will be
-  added to the schema later; the tool's filters don't account for it yet.
-- No price trend / appreciation scoring exists yet -- the agent cannot
-  yet answer "is this a good investment," only "what matches these
-  filters."
+  added to the schema later; the tools' filters don't account for it yet.
+- `price_trend_analyzer` is blocked, not built -- see "Why price trend
+  analysis is blocked" above. The live DB is a single-week snapshot with
+  no history to trend over yet.
+- `comparable_properties` candidate pool is capped at 1,000 rows per
+  query (see docstring) -- an honest approximation, not a guaranteed
+  exhaustive scan, for property_type/category groups larger than that.
+- `appreciation_score` does not exist yet -- the agent cannot yet answer
+  "is this a good investment," only "what matches these filters" and
+  "what similar listings exist right now."
 
 ## Roadmap
 
-- **Day 1 (this commit):** repo skeleton, DB layer, `search_listings` +
-  tests.
-- **Day 2:** `price_trend_analyzer`, `comparable_properties` tools; wire
-  first single-tool-call agent flow with LangChain.
+- **Day 1:** repo skeleton, DB layer, `search_listings` + tests.
+- **Day 2 (in progress):** investigated `analytics_week`/`analytics_year`
+  against the live DB, found no real trend history exists yet (see
+  finding above) -- deferred `price_trend_analyzer`. Built
+  `comparable_properties` + tests instead. Still to do this stage: wire
+  the first single-tool-call agent flow with LangChain.
 - **Day 2-3:** multi-step agent loop (broaden/narrow retry when search
   returns 0 or too many results), `appreciation_score` tool.
 - **Day 3:** validation/self-check step before final output, conversation
