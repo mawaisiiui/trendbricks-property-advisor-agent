@@ -93,21 +93,30 @@ LAND_PLOT_PROPERTY_TYPES = {
     "Plot Files", "Agricultural Land", "Plot Forms",
 }
 
-# Verified on 2026-07-08 via:
+# Re-verified against the live table on 2026-07-08 via:
 #   SELECT property_type, COUNT(*) total,
 #          SUM(CASE WHEN bedrooms='0' THEN 1 ELSE 0 END) zero_bedroom_count
 #   FROM properties WHERE property_type IN (...) GROUP BY property_type;
 #
+# (An earlier version of this comment and the README had a table with
+# totals like "Houses: 2,151,268" -- 100x+ larger than the entire table
+# (49,939 rows). Re-ran the query directly against the live DB and got
+# the numbers below instead; see README "Day 2 finding" for the
+# correction.)
+#
 # Zero-bedroom rate among "livable" types was NOT uniform:
-#   Houses 2.7%, Flats 5.3%, Upper Portions 1.2%, Lower Portions 1.4%
+#   Houses 4.2% (549/13,148), Flats 1.5% (181/11,726),
+#   Upper Portions 2.6% (47/1,791), Lower Portions 2.7% (24/891)
 #     -> low, consistent with ordinary scraping noise
-#   Farm Houses 17.5% -> elevated, cause unclear, treated as unreliable
-#   Penthouse 40.9%, Rooms 37.8% -> roughly 2 in 5 rows have bedrooms='0'
-#     -> too high to be noise. Likely explanation: "Rooms" listings are
-#     single-room rentals where a bedroom count doesn't cleanly apply,
-#     and "Penthouse" listings appear inconsistently scraped, sometimes
-#     at building- rather than unit-level. Not fully confirmed -- treated
-#     as a genuine open question, not asserted as fact.
+#   Farm Houses 21.1% (4/19) -> elevated, but from a tiny sample (19 rows
+#     total) -- cause unclear, treated as unreliable rather than explained
+#   Penthouse 32.4% (44/136), Rooms 29.1% (16/55) -> roughly 1 in 3 rows
+#     have bedrooms='0' -> too high to be noise. Likely explanation:
+#     "Rooms" listings are single-room rentals where a bedroom count
+#     doesn't cleanly apply, and "Penthouse" listings appear
+#     inconsistently scraped, sometimes at building- rather than
+#     unit-level. Not fully confirmed -- treated as a genuine open
+#     question, not asserted as fact.
 #
 # Practical consequence for the agent (Day 2+): bedrooms-based filtering
 # or reasoning should not be trusted at face value for these types --

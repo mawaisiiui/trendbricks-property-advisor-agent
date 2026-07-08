@@ -97,30 +97,34 @@ pytest tests/ -v
   (`LAND_PLOT_PROPERTY_TYPES` in `tools/search_listings.py`) into
   land/plot types (where `bedrooms='0'` is correct data) versus livable
   types (where it should be a real number).
-- **Resolved:** ran a real check of `bedrooms='0'` rate across the
-  livable property_types, grouped by type:
+- **Resolved, then corrected:** ran a real check of `bedrooms='0'` rate
+  across the livable property_types, grouped by type. An earlier version
+  of this table had totals like "Houses: 2,151,268" -- over 100x larger
+  than the entire `properties` table (49,939 rows) -- which cannot have
+  come from this DB. Re-ran the query directly against the live table to
+  get real numbers:
 
   | property_type | total | zero_bedroom | rate |
   |---|---|---|---|
-  | Houses | 2,151,268 | 57,123 | 2.7% |
-  | Flats | 1,014,196 | 53,412 | 5.3% |
-  | Upper Portions | 334,867 | 4,149 | 1.2% |
-  | Lower Portions | 224,595 | 3,117 | 1.4% |
-  | Penthouse | 10,566 | 4,318 | 40.9% |
-  | Farm Houses | 31,508 | 5,528 | 17.5% |
-  | Rooms | 19,058 | 7,202 | 37.8% |
+  | Houses | 13,148 | 549 | 4.2% |
+  | Flats | 11,726 | 181 | 1.5% |
+  | Upper Portions | 1,791 | 47 | 2.6% |
+  | Lower Portions | 891 | 24 | 2.7% |
+  | Penthouse | 136 | 44 | 32.4% |
+  | Farm Houses | 19 | 4 | 21.1% |
+  | Rooms | 55 | 16 | 29.1% |
 
-  Houses/Flats/Upper/Lower Portions have a low rate (1-5%), consistent
+  Houses/Flats/Upper/Lower Portions have a low rate (1.5-4.2%), consistent
   with ordinary scraping noise. Penthouse and Rooms have a rate too high
-  to be noise (roughly 2 in 5 rows) -- likely because "Rooms" listings
+  to be noise (roughly 1 in 3 rows) -- likely because "Rooms" listings
   are single-room rentals where a bedroom count doesn't cleanly apply,
-  and "Penthouse" listings appear inconsistently scraped. Farm Houses
-  sits in between (17.5%) and is treated as uncertain rather than
-  explained. These three types are now flagged in code
-  (`UNRELIABLE_BEDROOM_DATA_PROPERTY_TYPES`) so the agent's future
-  bedroom-based reasoning can exclude or caveat them rather than
-  silently trusting a `bedrooms='0'` value that may just mean "not
-  recorded for this listing type."
+  and "Penthouse" listings appear inconsistently scraped. Farm Houses is
+  elevated too (21.1%) but from a tiny sample (19 rows total in the whole
+  table), so treated as uncertain rather than explained. These three
+  types are flagged in code (`UNRELIABLE_BEDROOM_DATA_PROPERTY_TYPES`) so
+  the agent's future bedroom-based reasoning can exclude or caveat them
+  rather than silently trusting a `bedrooms='0'` value that may just mean
+  "not recorded for this listing type."
 - The `search_listings_tool_fn` LangChain adapter is written but not yet
   registered with an actual agent -- there is no agent loop yet (Day 2).
 - No amenities data is ingested yet. The user mentioned amenities will be
