@@ -17,8 +17,14 @@ Usage:
 import argparse
 import csv
 import sys
+from pathlib import Path
 
-sys.path.insert(0, ".")  # allow running from scripts/ or repo root
+# Insert the repo root (parent of this scripts/ folder) onto sys.path,
+# based on this file's own location -- not the current working directory.
+# This makes `python scripts/export_data.py` work correctly whether you
+# run it from the repo root, from inside scripts/, or from anywhere else.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 from db import run_query, TABLE_NAME  # noqa: E402
 
