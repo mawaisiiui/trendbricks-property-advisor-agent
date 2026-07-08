@@ -16,6 +16,10 @@ import pytest
 
 from tools.search_listings import (
     ListingFilters,
+    LAND_PLOT_PROPERTY_TYPES,
+    REAL_CATEGORY_VALUES,
+    REAL_PROPERTY_TYPES,
+    UNRELIABLE_BEDROOM_DATA_PROPERTY_TYPES,
     _parse_address,
     search_listings,
     search_listings_tool_fn,
@@ -80,6 +84,78 @@ class TestParseAddress:
     def test_non_list_literal_wraps_in_list(self):
         # e.g. if a row somehow just has a plain string instead of a list literal
         assert _parse_address("'Islamabad'") == ["Islamabad"]
+
+
+class TestKnownRealCategoryAndPropertyTypeValues:
+    """
+    Documents the real category and property_type values, verified
+    against the live table on 2026-07-08 via `SELECT DISTINCT category`
+    and `SELECT DISTINCT property_type`.
+
+    This is not a query-building test -- it's a guardrail against a
+    wrong assumption creeping back in. The first version of this tool
+    assumed category was 'rent'/'sale' based on early sample rows,
+    which was wrong. If someone "cleans up" these constants back to a
+    guess, this test is where that mistake would need to be
+    re-introduced deliberately, in writing.
+    """
+
+    @patch("tools.search_listings.run_query")
+    def test_filtering_by_each_real_category_builds_valid_query(self, mock_run_query):
+        mock_run_query.return_value = []
+        for category in REAL_CATEGORY_VALUES:
+            search_listings(ListingFilters(category=category))
+            sql, params = mock_run_query.call_args[0]
+            assert "category = %s" in sql
+            assert category in params
+
+    def test_sale_is_not_a_real_category_value(self):
+        # Explicit negative check: 'sale' was the original wrong guess.
+        # This stays in the suite as a reminder for the Day 2 NL-to-filter
+        # extraction step (a user saying "for sale" must map to 'buy' or
+        # 'commercial_buy', not a literal 'sale' string).
+        assert "sale" not in REAL_CATEGORY_VALUES
+
+    @patch("tools.search_listings.run_query")
+    def test_filtering_by_each_real_property_type_builds_valid_query(self, mock_run_query):
+        mock_run_query.return_value = []
+        for prop_type in REAL_PROPERTY_TYPES:
+            search_listings(ListingFilters(property_type=prop_type))
+            sql, params = mock_run_query.call_args[0]
+            assert "property_type = %s" in sql
+            assert prop_type in params
+
+    def test_land_plot_types_are_a_subset_of_all_property_types(self):
+        # Every land/plot type used for the bedrooms=0-is-expected logic
+        # must actually be a real, verified property_type -- catches a
+        # typo in the grouping constant itself.
+        assert LAND_PLOT_PROPERTY_TYPES.issubset(REAL_PROPERTY_TYPES)
+
+    def test_houses_is_not_classified_as_a_land_plot_type(self):
+        # Sanity check on the grouping: livable types must NOT be in the
+        # land/plot set, since that set drives the "bedrooms=0 is
+        # expected" assumption elsewhere.
+        assert "Houses" not in LAND_PLOT_PROPERTY_TYPES
+        assert "Flats" not in LAND_PLOT_PROPERTY_TYPES
+
+    def test_unreliable_bedroom_types_are_real_property_types(self):
+        # Catches a typo in the constant itself.
+        assert UNRELIABLE_BEDROOM_DATA_PROPERTY_TYPES.issubset(REAL_PROPERTY_TYPES)
+
+    def test_unreliable_bedroom_types_do_not_overlap_land_plot_types(self):
+        # These are two separate reasons bedrooms='0' can appear
+        # (land legitimately has none vs. livable-type data quality
+        # issue). A type should not be reachable via both explanations
+        # at once -- that would make the distinction meaningless.
+        assert UNRELIABLE_BEDROOM_DATA_PROPERTY_TYPES.isdisjoint(LAND_PLOT_PROPERTY_TYPES)
+
+    def test_houses_and_flats_are_not_flagged_unreliable(self):
+        # Verified real zero-bedroom rate for these was low (2.7% / 5.3%)
+        # -- consistent with ordinary scraping noise, not a structural
+        # data problem. Only Penthouse/Rooms/Farm Houses showed rates
+        # high enough (17-41%) to flag as unreliable.
+        assert "Houses" not in UNRELIABLE_BEDROOM_DATA_PROPERTY_TYPES
+        assert "Flats" not in UNRELIABLE_BEDROOM_DATA_PROPERTY_TYPES
 
 
 class TestSearchListingsQueryBuilding:

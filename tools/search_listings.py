@@ -19,27 +19,101 @@ not assumed from a clean schema):
    For numeric size filtering we use the `area` column (square feet)
    instead, and only use `area_marla` for display / rough bucket matching.
 
-3. `bedrooms` / `bathrooms` are '0' for plots and commercial land, which is
-   correct data (not missing data) -- a plot has no bedrooms. The tool
-   does not treat 0 as a null/missing signal.
+3. `bedrooms` / `bathrooms` are `'0'` for plots and commercial land, which
+   is correct data (not missing data) -- a plot has no bedrooms. The tool
+   does not treat 0 as a null/missing signal. Important correction: this
+   is only true for the land/plot property_types. Verified property_types
+   also include residential types (`Houses`, `Flats`, `Upper Portions`,
+   `Lower Portions`, `Penthouse`, `Farm Houses`, `Rooms`) where bedrooms
+   should be a real, non-zero value. A `Houses` row with `bedrooms='0'`
+   is a genuine data quality issue worth flagging, not expected behavior
+   the way it is for a `Residential Plots` row.
 
-4. `category` values observed so far: 'rent', (presumably 'sale' also
-   exists elsewhere in the table). The tool does not hardcode an
-   exhaustive list -- it passes through whatever the caller filters on
-   and matches it exactly against the column.
+4. `category` has four real values, verified by querying the live table
+   directly (not assumed): 'buy', 'rent', 'commercial_buy',
+   'commercial_rent'. My earlier assumption while writing this tool was
+   wrong -- I guessed 'rent' and 'sale' based on the sample rows I had
+   seen, which all happened to be 'rent'. The tool itself does not
+   hardcode category values (it passes through whatever the caller
+   filters on via an exact match), so no code change was needed once
+   this was verified -- but it means a filter of 'sale' would silently
+   return zero results, since that value does not exist. Worth
+   remembering when writing the natural-language-to-filter extraction
+   step later (Day 2): a user saying "for sale" needs to map to 'buy'
+   or 'commercial_buy', not 'sale'.
 
-Known limitation (documented honestly, not hidden): with only a handful of
-rows inspected so far, this tool has not yet been tested against the full
-range of `property_type` and `category` values that exist in the live
-table. Edge cases in real data (typos, inconsistent casing, unexpected
-NULLs) are expected to surface once this runs against the full dataset --
-see the "Known issues" section in the README.
+5. `property_type` has 19 real values, verified directly against the live
+   table: Houses, Flats, Upper Portions, Lower Portions, Penthouse, Farm
+   Houses, Rooms, Offices, Shops, Warehouses, Buildings, Other, Factories,
+   Residential Plots, Industrial Land, Commercial Plots, Plot Files,
+   Agricultural Land, Plot Forms. These fall into two broad groups that
+   the agent will eventually need to treat differently: livable/rentable
+   space (Houses, Flats, Upper/Lower Portions, Penthouse, Farm Houses,
+   Rooms, Offices, Shops, Warehouses, Buildings, Factories) where
+   bedrooms/bathrooms/amenities are meaningful, versus land/plot types
+   (Residential Plots, Industrial Land, Commercial Plots, Plot Files,
+   Agricultural Land, Plot Forms) where they are not. `Other` does not
+   fit cleanly into either group and is treated as livable/unknown for
+   now until real examples of it are inspected.
+
+Known limitation (documented honestly, not hidden): `category` and
+`property_type` values are now both verified against the live table (see
+points 4 and 5 above). What is still unverified: whether `bedrooms`/
+`bathrooms` are reliably non-zero across all rows of the "livable" types
+listed in point 5, or whether real data quality issues exist there (e.g.
+a `Houses` row with `bedrooms='0'`). That check is planned before this
+tool is trusted to reason about livable-space listings inside the agent
+loop -- see the "Known issues" section in the README.
 """
 
 import ast
 from dataclasses import dataclass, field
 
 from db import run_query, TABLE_NAME
+
+# Verified against the live table on 2026-07-08 via
+# SELECT DISTINCT category / SELECT DISTINCT property_type.
+# Not guessed -- kept here as the single source of truth so future code
+# (Day 2 NL-to-filter extraction, validation checks) references real
+# values instead of re-guessing them.
+REAL_CATEGORY_VALUES = {"buy", "rent", "commercial_buy", "commercial_rent"}
+
+REAL_PROPERTY_TYPES = {
+    "Houses", "Flats", "Upper Portions", "Lower Portions", "Penthouse",
+    "Farm Houses", "Rooms", "Offices", "Shops", "Warehouses", "Buildings",
+    "Other", "Factories", "Residential Plots", "Industrial Land",
+    "Commercial Plots", "Plot Files", "Agricultural Land", "Plot Forms",
+}
+
+# property_types where bedrooms='0'/bathrooms='0' is expected, correct
+# data -- land has no bedrooms. For every other type, bedrooms='0' is a
+# potential data quality issue worth flagging, not expected behavior.
+LAND_PLOT_PROPERTY_TYPES = {
+    "Residential Plots", "Industrial Land", "Commercial Plots",
+    "Plot Files", "Agricultural Land", "Plot Forms",
+}
+
+# Verified on 2026-07-08 via:
+#   SELECT property_type, COUNT(*) total,
+#          SUM(CASE WHEN bedrooms='0' THEN 1 ELSE 0 END) zero_bedroom_count
+#   FROM properties WHERE property_type IN (...) GROUP BY property_type;
+#
+# Zero-bedroom rate among "livable" types was NOT uniform:
+#   Houses 2.7%, Flats 5.3%, Upper Portions 1.2%, Lower Portions 1.4%
+#     -> low, consistent with ordinary scraping noise
+#   Farm Houses 17.5% -> elevated, cause unclear, treated as unreliable
+#   Penthouse 40.9%, Rooms 37.8% -> roughly 2 in 5 rows have bedrooms='0'
+#     -> too high to be noise. Likely explanation: "Rooms" listings are
+#     single-room rentals where a bedroom count doesn't cleanly apply,
+#     and "Penthouse" listings appear inconsistently scraped, sometimes
+#     at building- rather than unit-level. Not fully confirmed -- treated
+#     as a genuine open question, not asserted as fact.
+#
+# Practical consequence for the agent (Day 2+): bedrooms-based filtering
+# or reasoning should not be trusted at face value for these types --
+# either exclude them from bedroom filters or surface a caveat to the
+# user rather than silently returning misleading matches.
+UNRELIABLE_BEDROOM_DATA_PROPERTY_TYPES = {"Penthouse", "Rooms", "Farm Houses"}
 
 
 def _parse_address(raw_address: str) -> list[str]:
